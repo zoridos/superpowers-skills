@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    # Public repo: GitHub-hosted runner only. Never self-hosted.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check SKILL.md frontmatter and markdown links
+        shell: bash
+        run: |
+          set -u
+          status=0
+
+          echo "::group::SKILL.md frontmatter"
+          while IFS= read -r f; do
+            if [ "$(sed -n '1p' "$f")" != "---" ]; then
+              echo "::error file=$f::SKILL.md has no frontmatter block"
+              status=1
+              continue
+            fi
+            fm=$(awk 'NR==1{next} /^---$/{exit} {print}' "$f")
+            for key in name description; do
+              if ! grep -qE "^${key}:[[:space:]]*[^[:space:]]" <<<"$fm"; then
+                echo "::error file=$f::frontmatter is missing a non-empty '$key:'"
+                status=1
+              fi
+            done
+          done < <(git ls-files '*SKILL.md')
+          echo "::endgroup::"
+
+          echo "::group::Markdown relative links"
+          while IFS= read -r f; do
+            dir=$(dirname "$f")
+            while IFS= read -r link; do
+              target=${link%%#*}
+              target=${target%%\?*}
+              case "$target" in
+                ''|http://*|https://*|mailto:*) continue ;;
+              esac
+              if [[ "$target" == /* ]]; then
+                path=".${target}"
+              else
+                path="$dir/$target"
+              fi
+              if [ ! -e "$path" ]; then
+                echo "::error file=$f::broken link to '$target'"
+                status=1
+              fi
+            done < <(grep -oE '\]\([^)[:space:]]+\)' "$f" | sed -E 's/^\]\((.*)\)$/\1/')
+          done < <(git ls-files '*.md')
+          echo "::endgroup::"
+
+          exit $status
